@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Algoritmo de Fleury</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <main>
+        <h1>Algoritmo de Fleury</h1>
+        <p>Clique em um vértice para escolher o início do circuito.</p>
+
+        <div class="workspace">
+            <section class="graph-column" aria-label="Grafo e circuito">
+                <div class="canvas-wrap">
+                    <svg id="graph-canvas" viewBox="0 0 800 460" role="img" aria-label="Grafo Euleriano">
+                        <rect width="800" height="460" fill="#202b29" />
+                        <g id="edges"></g>
+                        <g id="vertices"></g>
+                    </svg>
+                </div>
+                <div class="graph-meta">
+                    <div class="legend"><span><i class="key-line"></i>aresta</span><span><i
+                                class="key-line bridge"></i>ponte</span></div>
+                </div>
+                <section class="tour-block" aria-label="Circuito encontrado">
+                    <div class="tour-heading">
+                        <h2>Tour</h2><span id="progress">0 / 8 arestas</span>
+                    </div>
+                    <div id="tour" class="tour" aria-live="polite">Aguardando início</div>
+                </section>
+            </section>
+
+            <section class="controls" aria-label="Controles">
+                <button id="restore" class="button" type="button">Restaurar grafo</button>
+                <div class="validation"><span class="status-dot"></span>
+                    <div><strong>Circuito Euleriano válido</strong>
+                        <p>Grafo conexo; todos os graus são pares.</p>
+                    </div>
+                </div>
+                <div class="control-block run-block">
+                    <button id="start" class="button primary" type="button">Iniciar Tour</button>
+                    <button id="step" class="button" type="button">Avançar passo</button>
+                    <button id="reset" class="button reset" type="button" aria-label="Reiniciar percurso">↺</button>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script>
+        const svg = document.querySelector('#graph-canvas');
+        const edgesLayer = document.querySelector('#edges');
+        const verticesLayer = document.querySelector('#vertices');
+        const vertices = [[105, 95], [425, 95], [425, 350], [105, 350], [665, 220], [255, 220]];
+        const originalEdges = [[0, 1], [0, 3], [1, 2], [1, 4], [1, 5], [2, 3], [2, 4], [2, 5]];
+        let edges, remaining, tour, current, start = 0, timer, busy = false, automatic = false;
+
+        function makeSvg(name, attrs, text = '') {
+            const node = document.createElementNS('http://www.w3.org/2000/svg', name);
+            Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, value));
+            node.textContent = text;
+            return node;
+        }
+
+        function reachable(from, removed = -1) {
+            const seen = new Set([from]), queue = [from];
+            while (queue.length) {
+                const vertex = queue.shift();
+                edges.forEach((edge, id) => {
+                    if (!remaining.has(id) || id === removed) return;
+                    const next = edge[0] === vertex ? edge[1] : edge[1] === vertex ? edge[0] : -1;
+                    if (next >= 0 && !seen.has(next)) { seen.add(next); queue.push(next); }
+                });
+            }
+            return seen.size;
+        }
+
+        function isBridge(id) {
+            return reachable(edges[id][0]) > reachable(edges[id][0], id);
+        }
+
+        function render() {
+            edgesLayer.replaceChildren();
+            verticesLayer.replaceChildren();
+            edges.forEach(([a, b], id) => {
+                if (!remaining.has(id)) return;
+                const [x1, y1] = vertices[a], [x2, y2] = vertices[b];
+                const group = makeSvg('g', { 'data-edge': id });
+                group.append(makeSvg('line', { x1, y1, x2, y2, class: `edge${isBridge(id) ? ' bridge' : ''}` }));
+                edgesLayer.append(group);
+            });
+            vertices.forEach(([x, y], id) => {
+                const group = makeSvg('g', { 'data-vertex': id });
+                const degree = edges.filter(edge => edge.includes(id)).length;
+                group.append(makeSvg('circle', { cx: x, cy: y, r: 19, class: `node${current === id ? ' current' : tour.includes(id) ? ' visited' : ''}${current === null && start === id ? ' selected' : ''}` }));
+                group.append(makeSvg('text', { x, y, class: 'node-label' }, id));
+                group.append(makeSvg('text', { x, y: y + 34, class: 'node-degree' }, `grau ${degree}`));
+                verticesLayer.append(group);
+            });
+            document.querySelector('#degrees').textContent = vertices.map((_, id) => `${id}:${edges.filter(edge => edge.includes(id)).length}`).join('   ');
+            document.querySelector('#tour').textContent = tour.join(' → ') || 'Aguardando início';
+            document.querySelector('#progress').textContent = `${originalEdges.length - remaining.size} / ${originalEdges.length} arestas`;
+            document.querySelector('#start').disabled = busy || automatic || remaining.size === 0;
+            document.querySelector('#step').disabled = busy || automatic || remaining.size === 0;
+        }
+
+        function reset() {
+            clearTimeout(timer);
+            edges = originalEdges.map(edge => [...edge]);
+            remaining = new Set(edges.map((_, id) => id));
+            tour = []; current = null; busy = false; automatic = false;
+            render();
+        }
+
+        function step(auto = false) {
+            if (busy || !remaining.size) return;
+            if (current === null) { current = start; tour = [current]; }
+            const choices = edges.map((edge, id) => ({ edge, id })).filter(({ edge, id }) => remaining.has(id) && edge.includes(current));
+            const selected = choices.find(({ id }) => !isBridge(id)) || choices[0];
+            if (!selected) return;
+            busy = true;
+            render();
+            const line = edgesLayer.querySelector(`[data-edge="${selected.id}"] .edge`);
+            if (line) line.classList.add('traversing');
+            timer = setTimeout(() => {
+                remaining.delete(selected.id);
+                current = selected.edge[0] === current ? selected.edge[1] : selected.edge[0];
+                tour.push(current);
+                busy = false;
+                render();
+                if (auto && remaining.size) timer = setTimeout(() => step(true), 580);
+                else automatic = false;
+            }, 420);
+        }
+
+        document.querySelector('#start').addEventListener('click', () => {
+            automatic = true;
+            render();
+            timer = setTimeout(() => step(true), 1000);
+        });
+        document.querySelector('#step').addEventListener('click', () => step());
+        document.querySelector('#reset').addEventListener('click', reset);
+        document.querySelector('#restore').addEventListener('click', reset);
+        svg.addEventListener('click', event => {
+            const vertex = event.target.closest('[data-vertex]');
+            if (vertex && current === null) { start = Number(vertex.dataset.vertex); render(); }
+        });
+        reset();
+    </script>
+</body>
+
+</html>
